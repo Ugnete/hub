@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react';
 import { 
   Bot, Play, Zap, Save, Trash2, Plus, Settings, RefreshCw, 
   Clock, Calendar, Star, GitFork, Eye, AlertCircle, CheckCircle, 
-  Loader, Filter, Search, Code, Tag, Database, FileCode
+  Loader, Filter, Search, Code, Tag, Database, FileCode, Bookmark
 } from 'lucide-react';
 import { 
   DiscoveryAgent, 
@@ -12,9 +12,11 @@ import {
   updateDiscoveryAgent, 
   deleteDiscoveryAgent, 
   runDiscoveryAgent,
-  getAgentTemplates
+  getAgentTemplates,
+  saveRepoToAgentContext
 } from '../utils/agentDiscovery';
 import { GitHubRepo } from '../utils/github';
+import AgentContextManager from './AgentContextManager';
 
 interface AgentDiscoveryPanelProps {
   onSelectRepo: (repo: GitHubRepo) => void;
@@ -29,6 +31,7 @@ export default function AgentDiscoveryPanel({ onSelectRepo }: AgentDiscoveryPane
   const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [searchQuery, setSearchQuery] = useState('');
   const [filterStatus, setFilterStatus] = useState<'all' | 'idle' | 'running' | 'completed' | 'error'>('all');
+  const [activeTab, setActiveTab] = useState<'results' | 'context'>('results');
 
   useEffect(() => {
     loadAgents();
@@ -42,6 +45,11 @@ export default function AgentDiscoveryPanel({ onSelectRepo }: AgentDiscoveryPane
       setSelectedAgent(loadedAgents[0]);
       if (loadedAgents[0].results.length > 0) {
         setSelectedResult(loadedAgents[0].results[loadedAgents[0].results.length - 1]);
+      }
+    } else if (selectedAgent) {
+      const updatedAgent = loadedAgents.find(a => a.id === selectedAgent.id);
+      if (updatedAgent) {
+        setSelectedAgent(updatedAgent);
       }
     }
   };
@@ -83,6 +91,23 @@ export default function AgentDiscoveryPanel({ onSelectRepo }: AgentDiscoveryPane
 
   const handleSelectResult = (result: AgentResult) => {
     setSelectedResult(result);
+    setActiveTab('results');
+  };
+
+  const handleSaveToContext = async (repo: GitHubRepo) => {
+    if (!selectedAgent) return;
+    
+    try {
+      await saveRepoToAgentContext(selectedAgent.id, repo);
+      loadAgents();
+    } catch (error) {
+      console.error('Error saving repo to context:', error);
+    }
+  };
+
+  const handleAgentUpdate = (updatedAgent: DiscoveryAgent) => {
+    updateDiscoveryAgent(updatedAgent.id, updatedAgent);
+    loadAgents();
   };
 
   const filteredAgents = agents.filter(agent => {
@@ -190,6 +215,7 @@ export default function AgentDiscoveryPanel({ onSelectRepo }: AgentDiscoveryPane
                     setSelectedAgent(agent);
                     if (agent.results.length > 0) {
                       setSelectedResult(agent.results[agent.results.length - 1]);
+                      setActiveTab('results');
                     } else {
                       setSelectedResult(null);
                     }
@@ -208,7 +234,13 @@ export default function AgentDiscoveryPanel({ onSelectRepo }: AgentDiscoveryPane
                       <Clock className="w-3.5 h-3.5 mr-1" />
                       <span>Last run: {formatDate(agent.lastRun)}</span>
                     </div>
-                    <span>{agent.results.length} results</span>
+                    <div className="flex items-center space-x-2">
+                      <span>{agent.results.length} results</span>
+                      <span className="flex items-center">
+                        <Bookmark className="w-3.5 h-3.5 mr-1" />
+                        <span>{agent.config.contextSettings?.savedRepos.length || 0}</span>
+                      </span>
+                    </div>
                   </div>
                 </div>
               ))
@@ -263,171 +295,191 @@ export default function AgentDiscoveryPanel({ onSelectRepo }: AgentDiscoveryPane
                 </div>
               </div>
               
-              <div className="grid grid-cols-3 gap-4 mb-4">
-                <div className="glass-card p-3 rounded-lg">
-                  <div className="text-xs text-gray-400 mb-1">Schedule</div>
-                  <div className="flex items-center">
-                    <Calendar className="w-4 h-4 text-indigo-400 mr-2" />
-                    <span className="text-sm">{selectedAgent.config.schedule.frequency}</span>
+              <div className="flex space-x-4 border-b border-gray-700/30 mb-4">
+                <button
+                  onClick={() => setActiveTab('results')}
+                  className={`pb-2 px-4 transition-colors ${
+                    activeTab === 'results'
+                      ? 'text-purple-400 border-b-2 border-purple-400'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2">
+                    <Database className="w-4 h-4" />
+                    <span>Results</span>
                   </div>
-                  <div className="text-xs text-gray-500 mt-1">
-                    Next run: {formatDate(selectedAgent.config.schedule.nextRun)}
+                </button>
+                <button
+                  onClick={() => setActiveTab('context')}
+                  className={`pb-2 px-4 transition-colors ${
+                    activeTab === 'context'
+                      ? 'text-purple-400 border-b-2 border-purple-400'
+                      : 'text-gray-400 hover:text-white'
+                  }`}
+                >
+                  <div className="flex items-center space-x-2">
+                    <Bookmark className="w-4 h-4" />
+                    <span>Context</span>
                   </div>
-                </div>
-                
-                <div className="glass-card p-3 rounded-lg">
-                  <div className="text-xs text-gray-400 mb-1">Search Criteria</div>
-                  <div className="flex items-center">
-                    <Search className="w-4 h-4 text-indigo-400 mr-2" />
-                    <span className="text-sm truncate">{selectedAgent.config.searchCriteria.query || 'Custom criteria'}</span>
-                  </div>
-                  <div className="flex flex-wrap gap-1 mt-1">
-                    {selectedAgent.config.searchCriteria.language && (
-                      <span className="px-1.5 py-0.5 rounded-full text-xs bg-blue-500/20 text-blue-300">
-                        {selectedAgent.config.searchCriteria.language}
-                      </span>
-                    )}
-                    {selectedAgent.config.searchCriteria.minStars && (
-                      <span className="px-1.5 py-0.5 rounded-full text-xs bg-yellow-500/20 text-yellow-300">
-                        ★ {selectedAgent.config.searchCriteria.minStars}+
-                      </span>
-                    )}
-                  </div>
-                </div>
-                
-                <div className="glass-card p-3 rounded-lg">
-                  <div className="text-xs text-gray-400 mb-1">Results</div>
-                  <div className="flex items-center">
-                    <Database className="w-4 h-4 text-indigo-400 mr-2" />
-                    <span className="text-sm">{selectedAgent.results.length} runs</span>
-                  </div>
-                  {selectedAgent.results.length > 0 && (
-                    <div className="text-xs text-gray-500 mt-1">
-                      Latest: {formatDate(selectedAgent.results[selectedAgent.results.length - 1].timestamp)}
-                    </div>
-                  )}
-                </div>
+                </button>
               </div>
               
-              <div className="flex-grow overflow-hidden">
-                <div className="flex items-center justify-between mb-3">
-                  <h4 className="font-medium flex items-center">
-                    <Database className="w-4 h-4 mr-2 text-indigo-400" />
-                    Discovery Results
-                  </h4>
-                  {selectedAgent.results.length > 0 && (
-                    <div className="flex space-x-2">
-                      <select
-                        value={selectedResult?.id || ''}
-                        onChange={(e) => {
-                          const resultId = e.target.value;
-                          const result = selectedAgent.results.find(r => r.id === resultId);
-                          if (result) setSelectedResult(result);
-                        }}
-                        className="bg-gray-800 border border-gray-700 rounded-md px-2 py-1 text-xs"
-                      >
+              {activeTab === 'results' && (
+                <div>
+                  {selectedAgent.results.length > 0 ? (
+                    <div className="mb-4">
+                      <div className="flex items-center justify-between mb-3">
+                        <h4 className="font-medium flex items-center">
+                          <Calendar className="w-4 h-4 mr-2 text-indigo-400" />
+                          Run History
+                        </h4>
+                        <div className="text-xs text-gray-400">
+                          {selectedAgent.results.length} runs total
+                        </div>
+                      </div>
+                      <div className="flex space-x-2 overflow-x-auto pb-2">
                         {selectedAgent.results.map((result, index) => (
-                          <option key={result.id} value={result.id}>
-                            Run #{selectedAgent.results.length - index} - {new Date(result.timestamp).toLocaleDateString()}
-                          </option>
+                          <button
+                            key={result.id}
+                            className={`px-3 py-1.5 rounded-md text-sm whitespace-nowrap ${
+                              selectedResult?.id === result.id
+                                ? 'bg-indigo-600/20 text-indigo-300 border border-indigo-500/50'
+                                : 'bg-gray-700/30 text-gray-300 border border-gray-700/50 hover:bg-gray-700/50'
+                            }`}
+                            onClick={() => handleSelectResult(result)}
+                          >
+                            Run {index + 1} - {new Date(result.timestamp).toLocaleDateString()}
+                          </button>
                         ))}
-                      </select>
+                      </div>
+                    </div>
+                  ) : null}
+                  
+                  {selectedResult ? (
+                    <div className="h-[calc(100%-2rem)] overflow-y-auto">
+                      <div className="grid grid-cols-3 gap-4 mb-4">
+                        <div className="glass-card p-3 rounded-lg">
+                          <div className="text-xs text-gray-400 mb-1">Total Repositories</div>
+                          <div className="text-xl font-bold text-indigo-400">{selectedResult.metrics.totalFound}</div>
+                        </div>
+                        <div className="glass-card p-3 rounded-lg">
+                          <div className="text-xs text-gray-400 mb-1">New Since Last Run</div>
+                          <div className="text-xl font-bold text-green-400">{selectedResult.metrics.newSinceLastRun}</div>
+                        </div>
+                        <div className="glass-card p-3 rounded-lg">
+                          <div className="text-xs text-gray-400 mb-1">Run Date</div>
+                          <div className="text-sm font-medium text-gray-300">{new Date(selectedResult.timestamp).toLocaleString()}</div>
+                        </div>
+                      </div>
+                      
+                      <div className="space-y-4">
+                        <h5 className="font-medium flex items-center">
+                          <Star className="w-4 h-4 mr-2 text-yellow-400" />
+                          Discovered Repositories
+                        </h5>
+                        
+                        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                          {selectedResult.repos.map((repo) => (
+                            <div
+                              key={repo.id}
+                              className="glass-card p-4 rounded-lg space-y-3 cursor-pointer hover:scale-[1.02] transition-all duration-300 relative group"
+                            >
+                              <div className="flex items-center space-x-3">
+                                <img
+                                  src={repo.owner.avatar_url}
+                                  alt={`${repo.name} owner avatar`}
+                                  className="w-6 h-6 rounded-lg"
+                                />
+                                <h3 className="font-semibold text-white">{repo.name}</h3>
+                              </div>
+
+                              <p className="text-sm text-gray-400 line-clamp-2">{repo.description}</p>
+
+                              <div className="flex items-center space-x-4 text-xs text-gray-400">
+                                <span className="flex items-center space-x-1">
+                                  <Star className="w-3.5 h-3.5 text-yellow-400" />
+                                  <span>{repo.stargazers_count.toLocaleString()}</span>
+                                </span>
+                                <span className="flex items-center space-x-1">
+                                  <GitFork className="w-3.5 h-3.5 text-blue-400" />
+                                  <span>{repo.forks_count.toLocaleString()}</span>
+                                </span>
+                                <span className="flex items-center space-x-1">
+                                  <Eye className="w-3.5 h-3.5 text-green-400" />
+                                  <span>{repo.watchers_count.toLocaleString()}</span>
+                                </span>
+                              </div>
+
+                              <div className="flex flex-wrap gap-1">
+                                {repo.language && (
+                                  <span className="px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400 border border-purple-500/30">
+                                    {repo.language}
+                                  </span>
+                                )}
+                                {repo.topics?.slice(0, 2).map(topic => (
+                                  <span key={topic} className="px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30">
+                                    {topic}
+                                  </span>
+                                ))}
+                              </div>
+                              
+                              <div className="absolute top-2 right-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                                <div className="flex space-x-1">
+                                  <button 
+                                    className="p-1.5 rounded-lg bg-indigo-600/20 hover:bg-indigo-600/40 transition-colors"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handleSaveToContext(repo);
+                                    }}
+                                    title="Save to context"
+                                  >
+                                    <Bookmark className="w-4 h-4 text-indigo-400" />
+                                  </button>
+                                  <button 
+                                    className="p-1.5 rounded-lg bg-purple-600/20 hover:bg-purple-600/40 transition-colors"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      onSelectRepo(repo);
+                                    }}
+                                    title="View details"
+                                  >
+                                    <Eye className="w-4 h-4 text-purple-400" />
+                                  </button>
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    </div>
+                  ) : (
+                    <div className="flex flex-col items-center justify-center h-64 text-gray-400">
+                      <Database className="w-12 h-12 text-gray-600 mb-3" />
+                      <p>No results yet</p>
+                      <button 
+                        className="mt-4 btn-primary"
+                        onClick={() => handleRunAgent(selectedAgent.id)}
+                        disabled={isLoading}
+                      >
+                        {isLoading ? (
+                          <Loader className="w-4 h-4 animate-spin" />
+                        ) : (
+                          <Play className="w-4 h-4" />
+                        )}
+                        <span>Run Agent</span>
+                      </button>
                     </div>
                   )}
                 </div>
-                
-                {selectedResult ? (
-                  <div className="h-[calc(100%-2rem)] overflow-y-auto">
-                    <div className="grid grid-cols-3 gap-4 mb-4">
-                      <div className="glass-card p-3 rounded-lg">
-                        <div className="text-xs text-gray-400 mb-1">Total Repositories</div>
-                        <div className="text-xl font-bold text-indigo-400">{selectedResult.metrics.totalFound}</div>
-                      </div>
-                      <div className="glass-card p-3 rounded-lg">
-                        <div className="text-xs text-gray-400 mb-1">New Since Last Run</div>
-                        <div className="text-xl font-bold text-green-400">{selectedResult.metrics.newSinceLastRun}</div>
-                      </div>
-                      <div className="glass-card p-3 rounded-lg">
-                        <div className="text-xs text-gray-400 mb-1">Run Date</div>
-                        <div className="text-sm font-medium text-gray-300">{new Date(selectedResult.timestamp).toLocaleString()}</div>
-                      </div>
-                    </div>
-                    
-                    <div className="space-y-4">
-                      <h5 className="font-medium flex items-center">
-                        <Star className="w-4 h-4 mr-2 text-yellow-400" />
-                        Discovered Repositories
-                      </h5>
-                      
-                      <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                        {selectedResult.repos.map((repo) => (
-                          <div
-                            key={repo.id}
-                            className="glass-card p-4 rounded-lg space-y-3 cursor-pointer hover:scale-[1.02] transition-all duration-300"
-                            onClick={() => onSelectRepo(repo)}
-                          >
-                            <div className="flex items-center space-x-3">
-                              <img
-                                src={repo.owner.avatar_url}
-                                alt={`${repo.name} owner avatar`}
-                                className="w-6 h-6 rounded-lg"
-                              />
-                              <h3 className="font-semibold text-white">{repo.name}</h3>
-                            </div>
-
-                            <p className="text-sm text-gray-400 line-clamp-2">{repo.description}</p>
-
-                            <div className="flex items-center space-x-4 text-xs text-gray-400">
-                              <span className="flex items-center space-x-1">
-                                <Star className="w-3.5 h-3.5 text-yellow-400" />
-                                <span>{repo.stargazers_count.toLocaleString()}</span>
-                              </span>
-                              <span className="flex items-center space-x-1">
-                                <GitFork className="w-3.5 h-3.5 text-blue-400" />
-                                <span>{repo.forks_count.toLocaleString()}</span>
-                              </span>
-                              <span className="flex items-center space-x-1">
-                                <Eye className="w-3.5 h-3.5 text-green-400" />
-                                <span>{repo.watchers_count.toLocaleString()}</span>
-                              </span>
-                            </div>
-
-                            <div className="flex flex-wrap gap-1">
-                              {repo.language && (
-                                <span className="px-1.5 py-0.5 rounded-full text-xs font-medium bg-purple-500/20 text-purple-400 border border-purple-500/30">
-                                  {repo.language}
-                                </span>
-                              )}
-                              {repo.topics?.slice(0, 2).map(topic => (
-                                <span key={topic} className="px-1.5 py-0.5 rounded-full text-xs font-medium bg-blue-500/20 text-blue-400 border border-blue-500/30">
-                                  {topic}
-                                </span>
-                              ))}
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-                  </div>
-                ) : (
-                  <div className="flex flex-col items-center justify-center h-64 text-gray-400">
-                    <Database className="w-12 h-12 text-gray-600 mb-3" />
-                    <p>No results yet</p>
-                    <button 
-                      className="mt-4 btn-primary"
-                      onClick={() => handleRunAgent(selectedAgent.id)}
-                      disabled={isLoading}
-                    >
-                      {isLoading ? (
-                        <Loader className="w-4 h-4 animate-spin" />
-                      ) : (
-                        <Play className="w-4 h-4" />
-                      )}
-                      <span>Run Agent</span>
-                    </button>
-                  </div>
-                )}
-              </div>
+              )}
+              
+              {activeTab === 'context' && (
+                <AgentContextManager 
+                  agent={selectedAgent}
+                  onAgentUpdate={handleAgentUpdate}
+                  onAddRepo={onSelectRepo}
+                />
+              )}
             </>
           ) : (
             <div className="flex flex-col items-center justify-center h-full">
